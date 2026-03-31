@@ -17,10 +17,14 @@ class UniverseRequest(BaseModel):
     """
 
     index_top_pct: float = Field(
-        default=20.0,
+        default=5.0,
         gt=0,
-        le=100.0,
-        description="Top % of Russell 2000 by index weight (~400 tickers at 20%).",
+        le=20.0,
+        description=(
+            "Top % of Russell 2000 by index weight. "
+            "5% ≈ 100 tickers (~30 s), 10% ≈ 200 tickers (~60 s), "
+            "20% ≈ 400 tickers (~120 s). Capped at 20% to prevent timeouts."
+        ),
     )
     midcap_min: float = Field(
         default=300_000_000,

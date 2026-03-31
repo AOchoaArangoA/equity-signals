@@ -20,8 +20,9 @@ workers = 2
 # UvicornWorker gives async support required by FastAPI.
 worker_class = "uvicorn.workers.UvicornWorker"
 
-# Long timeout for OHLCV + strategy computation (yfinance fallback is slow).
-timeout = 120
+# Long timeout: /universe fetches fundamentals for up to ~200 tickers via
+# yfinance (batches of 25 + inter-batch sleep). 300 s gives comfortable margin.
+timeout = 300
 
 # Restart workers after this many requests to prevent memory leaks.
 max_requests = 500
