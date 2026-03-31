@@ -13,8 +13,13 @@ from datetime import date
 
 import pandas as pd
 
+from pathlib import Path
+
+from equity_signals.data.yfinance_loader import YFinanceLoader
 from equity_signals.universe.ticker_loader import TickerLoader
 from equity_signals.universe.universe_filter import FilterConfig, UniverseFilter
+
+_TMP = Path("/tmp")
 
 from app.schemas.requests import UniverseRequest
 from app.schemas.responses import UniverseResponse, UniverseTicker
@@ -51,8 +56,10 @@ class UniverseService:
         )
 
         # ---- 1. Load tickers -------------------------------------------
+        # Use /tmp for all cache I/O so the API process (non-root, read-only
+        # working directory) never tries to write to .cache/ on disk.
         try:
-            loader = TickerLoader()
+            loader = TickerLoader(cache_dir=_TMP)
             tickers = (
                 loader.get_top_pct(request.index_top_pct)
                 if request.index_top_pct < 100.0
@@ -71,7 +78,7 @@ class UniverseService:
             pb_percentile=int(request.pb_percentile),
         )
         try:
-            df = UniverseFilter(config).run(tickers)
+            df = UniverseFilter(config, loader=YFinanceLoader(cache_dir=_TMP)).run(tickers)
         except Exception as exc:
             raise RuntimeError(f"Universe filter failed: {exc}") from exc
 
