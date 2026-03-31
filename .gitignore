@@ -31,3 +31,5 @@ reports/
 .idea/
 .vscode/
 *.swp
+
+test_api.py

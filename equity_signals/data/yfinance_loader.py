@@ -232,12 +232,14 @@ class YFinanceLoader:
                 " ..." if len(missing_pb) > 10 else "",
             )
 
+        nan_market_cap = int(df["market_cap"].isna().sum())
         elapsed = time.perf_counter() - t0
         logger.info(
-            "YFinanceLoader — fetched %d rows in %.1fs",
+            "Fundamentals fetched: %d tickers, %d returned NaN market_cap",
             len(df),
-            elapsed,
+            nan_market_cap,
         )
+        logger.info("YFinanceLoader — fetched %d rows in %.1fs", len(df), elapsed)
 
         self._save_cache(df)
         return df

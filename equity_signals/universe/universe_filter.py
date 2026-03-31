@@ -201,43 +201,54 @@ class UniverseFilter:
             logger.warning("UniverseFilter.run — YFinanceLoader returned no data")
             return pd.DataFrame(columns=OUTPUT_COLS)
 
-        logger.info("UniverseFilter — after FMP fetch: %d rows", len(df))
+        logger.info(
+            "NaN counts: market_cap=%d, pb_ratio=%d, roe=%d, sector=%d",
+            df["market_cap"].isna().sum(),
+            df["pb_ratio"].isna().sum(),
+            df["roe"].isna().sum(),
+            df["sector"].isna().sum(),
+        )
 
         # Stage 1 — market-cap filter
+        n_before = len(df)
         df = self._apply_midcap_filter(df)
         logger.info(
-            "UniverseFilter — after market-cap filter [%.0fM–%.0fM]: %d rows",
-            self._config.midcap_min / 1e6,
-            self._config.midcap_max / 1e6,
+            "After midcap filter: %d tickers remaining (dropped %d)",
             len(df),
+            n_before - len(df),
         )
         if df.empty:
             return pd.DataFrame(columns=OUTPUT_COLS)
 
         # Stage 2 — sector filter
+        n_before = len(df)
         df = self._apply_sector_filter(df)
         logger.info(
-            "UniverseFilter — after sector filter %s: %d rows",
-            self._config.sectors or "(all)",
+            "After sector filter: %d tickers remaining (dropped %d)",
             len(df),
+            n_before - len(df),
         )
         if df.empty:
             return pd.DataFrame(columns=OUTPUT_COLS)
 
         # Stage 3 — ROE filter (value trap exclusion)
+        n_before = len(df)
         df = self._apply_roe_filter(df)
-        logger.info("UniverseFilter — after ROE > 0 filter: %d rows", len(df))
+        logger.info(
+            "After ROE filter: %d tickers remaining (dropped %d)",
+            len(df),
+            n_before - len(df),
+        )
         if df.empty:
             return pd.DataFrame(columns=OUTPUT_COLS)
 
         # Stage 4 — intra-sector P/B ranking and percentile cut
+        n_before = len(df)
         df = self._apply_pb_ranking(df)
         logger.info(
-            "UniverseFilter.run — %d tickers carry value_signal=True "
-            "(pb_percentile=%d%%, total survivors=%d)",
-            int(df["value_signal"].sum()),
-            self._config.pb_percentile,
+            "After P/B ranking: %d tickers remaining (dropped %d)",
             len(df),
+            n_before - len(df),
         )
 
         return (
