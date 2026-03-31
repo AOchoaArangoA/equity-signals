@@ -1,19 +1,9 @@
-"""app.services.signal_engine — orchestrates the equity_signals pipeline.
+"""app.services.signal_engine — computes mean-reversion signals.
 
-:class:`SignalEngine` is the single point of contact between the FastAPI layer
-and the quantitative package.  It:
-
-1. Loads the latest universe snapshot via
-   :func:`~equity_signals.universe.universe_store.load_latest_universe`.
-2. Selects the top-N value tickers by ``pb_rank_sector``.
-3. Fetches OHLCV history via
-   :class:`~equity_signals.data.alpaca_loader.AlpacaLoader` (with automatic
-   yfinance fallback).
-4. Computes Z-score mean-reversion signals via
-   :class:`~equity_signals.strategies.mean_reversion.MeanReversionStrategy`.
-5. Returns a :class:`~app.schemas.responses.SignalResponse`.
-
-No quantitative logic lives here — this class only wires existing components.
+Delegates to :class:`~equity_signals.data.alpaca_loader.AlpacaLoader` and
+:class:`~equity_signals.strategies.mean_reversion.MeanReversionStrategy`.
+Never imports UniverseFilter or TickerLoader — the caller decides which
+tickers to analyse.
 """
 
 from __future__ import annotations
@@ -26,91 +16,78 @@ import pandas as pd
 
 from equity_signals.data.alpaca_loader import AlpacaLoader
 from equity_signals.strategies.mean_reversion import MeanReversionStrategy
-from equity_signals.universe.universe_store import load_latest_universe
 
 from app.schemas.requests import SignalRequest
-from app.schemas.responses import SignalResponse, TickerSignal, UniverseTicker
+from app.schemas.responses import SignalResponse, TickerSignal
 
 logger = logging.getLogger(__name__)
 
 
 class SignalEngine:
-    """Orchestrates the equity-signals pipeline for a single API request.
+    """Computes mean-reversion signals for an explicit list of tickers.
 
     Example::
 
         engine = SignalEngine()
-        response = engine.run_scan(request)
+        response = engine.run(request)
     """
 
-    def run_scan(self, request: SignalRequest) -> SignalResponse:
-        """Execute the full signal scan and return a :class:`SignalResponse`.
+    def run(self, request: SignalRequest) -> SignalResponse:
+        """Fetch OHLCV and compute signals for ``request.tickers``.
 
         Args:
             request: Validated :class:`~app.schemas.requests.SignalRequest`
-                containing filter parameters and strategy settings.
+                with a non-empty ``tickers`` list and strategy parameters.
 
         Returns:
-            :class:`~app.schemas.responses.SignalResponse` with universe
-            summary and per-ticker signal rows.
+            :class:`~app.schemas.responses.SignalResponse` with one row per
+            ticker-date.
 
         Raises:
-            FileNotFoundError: If no universe parquet exists in ``output/``.
-                Caller should return HTTP 503.
             RuntimeError: If OHLCV fetch or signal computation fails.
-                Caller should return HTTP 502.
         """
         run_date = date.today().isoformat()
         logger.info(
-            "SignalEngine.run_scan — date=%s top_n=%d window=%d z_entry=%.2f days=%d",
-            run_date, request.top_n, request.window, request.z_entry, request.days,
+            "SignalEngine.run — date=%s tickers=%s window=%d z_entry=%.2f days=%d",
+            run_date, request.tickers, request.window, request.z_entry, request.days,
         )
 
-        # ---- 1. Load universe ------------------------------------------
-        universe_df = load_latest_universe()
-        logger.info("Universe loaded — %d rows", len(universe_df))
-
-        # ---- 2. Select top-N value tickers -----------------------------
-        value_df = universe_df[universe_df["value_signal"] == True]  # noqa: E712
-        if value_df.empty:
-            logger.warning("No tickers with value_signal=True — returning empty response")
-            return SignalResponse(
-                run_date=run_date,
-                universe_size=0,
-                top_n=request.top_n,
-                universe=[],
-                signals=[],
-            )
-
-        top_df = value_df.nsmallest(request.top_n, "pb_rank_sector")
-        top_tickers: list[str] = top_df["ticker"].tolist()
-        logger.info("Top %d tickers: %s", len(top_tickers), top_tickers)
-
-        # ---- 3. Fetch OHLCV -------------------------------------------
+        # ---- 1. Fetch OHLCV (Alpaca primary, yfinance fallback) --------
         try:
-            prices = AlpacaLoader().get_ohlcv(top_tickers, days=request.days)
+            prices = AlpacaLoader().get_ohlcv(request.tickers, days=request.days)
         except Exception as exc:
             raise RuntimeError(f"OHLCV fetch failed: {exc}") from exc
 
-        # ---- 4. Compute signals ----------------------------------------
+        if prices.empty:
+            logger.warning("No price data returned — returning empty signals")
+            return SignalResponse(
+                run_date=run_date,
+                ticker_count=0,
+                signals=[],
+            )
+
+        # ---- 2. Compute signals ----------------------------------------
         try:
             strategy = MeanReversionStrategy(
                 window=request.window,
                 z_entry=request.z_entry,
+                z_exit=request.z_exit,
             )
             signals_df = strategy.compute(prices)
         except Exception as exc:
             raise RuntimeError(f"Signal computation failed: {exc}") from exc
 
-        # ---- 5. Build response -----------------------------------------
-        universe_rows = _build_universe(value_df)
-        signal_rows = _build_signals(signals_df)
+        # ---- 3. Build response -----------------------------------------
+        signal_rows = _build_signal_rows(signals_df)
+        ticker_count = signals_df["ticker"].nunique() if not signals_df.empty else 0
 
+        logger.info(
+            "SignalEngine.run complete — %d tickers, %d signal rows",
+            ticker_count, len(signal_rows),
+        )
         return SignalResponse(
             run_date=run_date,
-            universe_size=len(value_df),
-            top_n=len(top_tickers),
-            universe=universe_rows,
+            ticker_count=ticker_count,
             signals=signal_rows,
         )
 
@@ -120,29 +97,13 @@ class SignalEngine:
 # ---------------------------------------------------------------------------
 
 
-def _build_universe(df: pd.DataFrame) -> list[UniverseTicker]:
-    """Convert the value-signal universe DataFrame to response models."""
-    rows: list[UniverseTicker] = []
-    for _, row in df.iterrows():
-        rows.append(
-            UniverseTicker(
-                ticker=str(row["ticker"]),
-                market_cap=_safe_float(row.get("market_cap")),
-                pb_ratio=_safe_float(row.get("pb_ratio")),
-                roe=_safe_float(row.get("roe")),
-                sector=str(row.get("sector") or ""),
-                pb_rank_sector=int(row.get("pb_rank_sector", 0)),
-                value_signal=bool(row.get("value_signal", False)),
-            )
-        )
-    return rows
+def _build_signal_rows(df: pd.DataFrame) -> list[TickerSignal]:
+    """Convert the signals DataFrame to :class:`TickerSignal` models.
 
-
-def _build_signals(df: pd.DataFrame) -> list[TickerSignal]:
-    """Convert the signals DataFrame to response models, dropping NaN rows."""
+    Rows where ``signal`` is NaN (warm-up period) are dropped.
+    """
     rows: list[TickerSignal] = []
     for _, row in df.iterrows():
-        # Skip warm-up rows where signal is NaN.
         if pd.isna(row.get("signal")):
             continue
         rows.append(

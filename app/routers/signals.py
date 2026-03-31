@@ -1,31 +1,34 @@
-"""app.routers.signals — mean-reversion signal endpoint.
+"""app.routers.signals — universe and signal endpoints.
 
-Requires ``X-API-Key`` header authentication.  Delegates all quantitative
-work to :class:`~app.services.signal_engine.SignalEngine`.
+Two independent, stateless endpoints:
+
+* ``POST /api/v1/universe`` — builds the investable universe from Russell 2000
+  fundamentals.  Never imports MeanReversionStrategy.
+
+* ``POST /api/v1/signals`` — computes mean-reversion signals for any caller-
+  supplied ticker list.  Never imports UniverseFilter.
+
+Both require ``X-API-Key`` header authentication and return synchronously.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date
-from pathlib import Path
 
-import pandas as pd
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, Security
+from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 
 from app.core.config import Settings, get_settings
-from app.schemas.requests import SignalRequest
-from app.schemas.responses import SignalResponse
+from app.schemas.requests import SignalRequest, UniverseRequest
+from app.schemas.responses import SignalResponse, UniverseResponse
 from app.services.signal_engine import SignalEngine
-from equity_signals.scripts.run_universe_scan import run as _run_universe_scan
+from app.services.universe_service import UniverseService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["Signals"])
 
 _API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
-_TMP_DIR = Path("/tmp")
 
 
 # ---------------------------------------------------------------------------
@@ -43,119 +46,59 @@ def _require_api_key(
 
 
 # ---------------------------------------------------------------------------
-# Background task
-# ---------------------------------------------------------------------------
-
-
-def _run_universe_scan_bg() -> None:
-    """Run the full universe scan and save output to ``/tmp/``."""
-    today_str = date.today().strftime("%Y%m%d")
-    path = _TMP_DIR / f"universe_{today_str}.parquet"
-    try:
-        df = _run_universe_scan()
-        df.to_parquet(path, index=False)
-        logger.info("Universe scan complete — %d rows saved to %s", len(df), path)
-    except SystemExit:
-        # run_universe_scan calls sys.exit(1) on pipeline errors; treat as failure.
-        logger.error("Universe scan failed — check logs above for details")
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Universe scan background task error: %s", exc, exc_info=True)
-
-
-def _save_signals_parquet(signals: SignalResponse) -> None:
-    """Persist signal response to ``/tmp/signals_YYYYMMDD.parquet``."""
-    today_str = date.today().strftime("%Y%m%d")
-    path = _TMP_DIR / f"signals_{today_str}.parquet"
-    try:
-        rows = [s.model_dump() for s in signals.signals]
-        pd.DataFrame(rows).to_parquet(path, index=False)
-        logger.info("Background task — signals saved to %s", path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Background task — failed to save parquet: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Endpoint
+# Endpoints
 # ---------------------------------------------------------------------------
 
 
 @router.post(
-    "/universe/scan",
-    status_code=202,
-    summary="Trigger universe scan (async)",
+    "/universe",
+    response_model=UniverseResponse,
+    summary="Build investable universe",
     dependencies=[Depends(_require_api_key)],
 )
-def trigger_universe_scan(
-    background_tasks: BackgroundTasks,
-) -> Response:
-    """Enqueue a full universe scan and return immediately (HTTP 202).
+def build_universe(request: UniverseRequest) -> UniverseResponse:
+    """Generate the filtered investable universe from Russell 2000 fundamentals.
 
-    The scan runs in the background: downloads the Russell 2000, fetches
-    fundamentals via yfinance, applies UniverseFilter, and saves the result
-    to ``/tmp/universe_YYYYMMDD.parquet``.
+    Downloads the Russell 2000 constituent list from iShares IWM, fetches
+    fundamental data via yfinance, and applies the four-stage filter pipeline
+    (mid-cap → sector → ROE → intra-sector P/B ranking).
 
-    Once complete, ``POST /api/v1/signals`` will automatically pick up the
-    new file via :func:`~equity_signals.universe.universe_store.load_latest_universe`.
-
-    **Authentication**: ``X-API-Key`` header required.
-
-    Returns:
-        HTTP 202 with JSON body ``{"status": "accepted", "message": "..."}``.
-    """
-    today_str = date.today().strftime("%Y%m%d")
-    output_path = str(_TMP_DIR / f"universe_{today_str}.parquet")
-
-    background_tasks.add_task(_run_universe_scan_bg)
-    logger.info("Universe scan enqueued — output will be written to %s", output_path)
-
-    import json
-    return Response(
-        content=json.dumps({
-            "status": "accepted",
-            "message": "Universe scan started in background.",
-            "path": output_path,
-        }),
-        status_code=202,
-        media_type="application/json",
-    )
-
-
-@router.post(
-    "/signals",
-    response_model=SignalResponse,
-    summary="Run mean-reversion signal scan",
-    dependencies=[Depends(_require_api_key)],
-)
-def run_signals(
-    request: SignalRequest,
-    background_tasks: BackgroundTasks,
-) -> SignalResponse:
-    """Execute a mean-reversion signal scan on the pre-built universe.
-
-    Reads ``output/universe_*.parquet`` (built by ``equity-universe-scan``),
-    selects the top-N value tickers, fetches OHLCV from Alpaca (with yfinance
-    fallback), and returns Z-score signals.
+    Returns all tickers that passed the pipeline.  The caller can then select
+    a subset and pass them to ``POST /api/v1/signals``.
 
     **Authentication**: ``X-API-Key`` header required.
 
     Raises:
         HTTP 401: Missing or invalid API key.
-        HTTP 503: No universe file found — run ``equity-universe-scan`` first.
+        HTTP 502: Ticker download or filter pipeline failed.
+    """
+    try:
+        return UniverseService().run(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post(
+    "/signals",
+    response_model=SignalResponse,
+    summary="Compute mean-reversion signals",
+    dependencies=[Depends(_require_api_key)],
+)
+def compute_signals(request: SignalRequest) -> SignalResponse:
+    """Compute Z-score mean-reversion signals for a caller-supplied ticker list.
+
+    Fetches OHLCV history from Alpaca Markets (with automatic yfinance
+    fallback) and applies the mean-reversion strategy.  The ticker list can
+    come from anywhere — a previous ``/universe`` call, a watchlist, or any
+    other source.
+
+    **Authentication**: ``X-API-Key`` header required.
+
+    Raises:
+        HTTP 401: Missing or invalid API key.
         HTTP 502: OHLCV fetch or signal computation failed.
     """
     try:
-        engine = SignalEngine()
-        result = engine.run_scan(request)
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=str(exc),
-        ) from exc
+        return SignalEngine().run(request)
     except RuntimeError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=str(exc),
-        ) from exc
-
-    background_tasks.add_task(_save_signals_parquet, result)
-    return result
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

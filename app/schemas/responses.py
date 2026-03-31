@@ -49,19 +49,29 @@ class UniverseTicker(BaseModel):
     value_signal: bool
 
 
-class SignalResponse(BaseModel):
-    """Full response for a ``POST /api/v1/signals`` call.
+class UniverseResponse(BaseModel):
+    """Response for ``POST /api/v1/universe``.
 
     Attributes:
         run_date: ISO-8601 date the scan was executed (``YYYY-MM-DD``).
-        universe_size: Total number of tickers in the filtered universe.
-        top_n: Number of tickers signals were computed for.
-        universe: Filtered universe — all tickers with ``value_signal=True``.
-        signals: Mean-reversion signal rows for the top-N tickers.
+        universe_size: Number of tickers with ``value_signal=True``.
+        tickers: All tickers that passed the filter pipeline.
     """
 
     run_date: str
     universe_size: int
-    top_n: int
-    universe: list[UniverseTicker]
+    tickers: list[UniverseTicker]
+
+
+class SignalResponse(BaseModel):
+    """Response for ``POST /api/v1/signals``.
+
+    Attributes:
+        run_date: ISO-8601 date the scan was executed (``YYYY-MM-DD``).
+        ticker_count: Number of tickers signals were computed for.
+        signals: Mean-reversion signal rows (one per ticker-date).
+    """
+
+    run_date: str
+    ticker_count: int
     signals: list[TickerSignal]
