@@ -22,7 +22,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 
 from app.core.config import get_settings
-from app.routers import health, signals
+from app.routers import health, orders, signals
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -94,3 +94,4 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(signals.router)
+app.include_router(orders.router)

@@ -63,6 +63,40 @@ class UniverseResponse(BaseModel):
     tickers: list[UniverseTicker]
 
 
+class Position(BaseModel):
+    """Snapshot of a single open Alpaca position.
+
+    Attributes:
+        ticker: Uppercase ticker symbol.
+        qty: Number of shares held.
+        market_value: Current market value in USD.
+        unrealized_pct: Unrealised P&L as a percentage.
+    """
+
+    ticker: str
+    qty: float
+    market_value: float
+    unrealized_pct: float
+
+
+class OrderConfirmation(BaseModel):
+    """Confirmation of a submitted market order.
+
+    Attributes:
+        ticker: Uppercase ticker symbol.
+        qty: Number of shares ordered.
+        side: ``"buy"`` or ``"sell"``.
+        status: Alpaca order status string (e.g. ``"accepted"``).
+        order_id: Alpaca order UUID.
+    """
+
+    ticker: str
+    qty: float
+    side: str
+    status: str
+    order_id: str
+
+
 class SignalResponse(BaseModel):
     """Response for ``POST /api/v1/signals``.
 
