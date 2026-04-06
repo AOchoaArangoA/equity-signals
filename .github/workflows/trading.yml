@@ -2,12 +2,12 @@ name: equity-signals watchlist
 
 on:
   schedule:
-    - cron: '0 12 * * 1'
-    - cron: '45 13 * * 1-5'
-    - cron: '0 15 * * 1-5'
-    - cron: '30 16 * * 1-5'
-    - cron: '0 18 * * 1-5'
-    - cron: '30 19 * * 1-5'
+    - cron: '0 12 * * 1'       # Monday 8:00 am ET — weekly entry scan
+    - cron: '45 13 * * 1-5'    # 9:45 am ET  — exit check
+    - cron: '0 15 * * 1-5'     # 11:00 am ET — exit check
+    - cron: '30 16 * * 1-5'    # 12:30 pm ET — exit check
+    - cron: '0 18 * * 1-5'     # 2:00 pm ET  — exit check
+    - cron: '30 19 * * 1-5'    # 3:30 pm ET  — exit check pre-close
   workflow_dispatch:
     inputs:
       mode:
@@ -43,9 +43,13 @@ jobs:
           python -c "import equity_signals; print('Package OK')"
           python -c "from equity_signals.execution.alpaca_trader import AlpacaTrader; print('AlpacaTrader OK')"
 
-      - name: Entry scan (lunes 8am)
+      - name: Compute signals
         if: github.event.schedule == '0 12 * * 1'
-        run: python scripts/run_from_watchlist.py entry
+        run: python scripts/run_signals.py
+
+      - name: Entry scan
+        if: github.event.schedule == '0 12 * * 1'
+        run: python scripts/run_entry.py
 
       - name: Exit check
         if: >
@@ -54,8 +58,18 @@ jobs:
           github.event.schedule == '30 16 * * 1-5' ||
           github.event.schedule == '0 18 * * 1-5'  ||
           github.event.schedule == '30 19 * * 1-5'
-        run: python scripts/run_from_watchlist.py exit
+        run: python scripts/run_exit.py
 
-      - name: Manual run
-        if: github.event_name == 'workflow_dispatch'
-        run: python scripts/run_from_watchlist.py ${{ github.event.inputs.mode }}
+      - name: Compute signals
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'signals'
+        run: python scripts/run_signals.py
+
+      - name: Entry scan
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'entry'
+        run: |
+          python scripts/run_signals.py
+          python scripts/run_entry.py
+
+      - name: Exit check
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'exit'
+        run: python scripts/run_exit.py
