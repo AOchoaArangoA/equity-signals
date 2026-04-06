@@ -177,21 +177,23 @@ def main() -> None:
                     f"Qty: {int(qty)} shares (not submitted)"
                 )
             else:
-                # ── Submit order FIRST, then notify with confirmed order_id ──
+                # ── close_position cancels pending orders automatically ──────
                 try:
-                    order = trader.submit_market_sell(ticker, int(qty))
+                    order = trader.close_position(ticker)
                     exit_record.update({"status": "submitted", **order})
-                    log.info("SELL submitted: %s", order)
+                    log.info("close_position submitted: %s", order)
+                    already = order.get("already_pending", False)
                     _tg_send(
-                        f"<b>🔴 EXIT EXECUTED — {ticker}</b>\n"
+                        f"<b>{'🟡 EXIT ALREADY PENDING' if already else '🔴 EXIT EXECUTED'} — {ticker}</b>\n"
                         f"Reason: {reason_str}\n"
                         f"Z-score: {z_str_tg}\n"
                         f"Unrealized P&amp;L: {unreal_pct:.1%}\n"
-                        f"Qty sold: {int(qty)}\n"
-                        f"Order ID: <code>{order['order_id']}</code>"
+                        f"Qty: {int(qty)}\n"
+                        f"Order ID: <code>{order['order_id']}</code>\n"
+                        f"{'(sell order already in queue)' if already else ''}"
                     )
                 except Exception as exc:
-                    log.error("Sell failed for %s: %s", ticker, exc)
+                    log.error("close_position failed for %s: %s", ticker, exc)
                     exit_record["status"] = "error"
                     exit_record["error"]  = str(exc)
                     result["errors"].append({"ticker": ticker, "error": str(exc)})

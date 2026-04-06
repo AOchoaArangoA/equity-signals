@@ -131,6 +131,56 @@ class AlpacaTrader:
                     result["order_id"], result["status"])
         return result
 
+    def close_position(self, ticker: str) -> dict:
+        """Close the entire open position for *ticker*.
+
+        If a pending sell order already exists for the symbol (``held_for_orders``
+        equals the full position qty), returns that order's details immediately
+        instead of submitting a duplicate — Alpaca would reject it with
+        ``insufficient qty available`` (code 40310000).
+
+        Otherwise cancels any pending buy orders for the symbol, then submits
+        a market-sell for the full position via the native close-position endpoint.
+
+        Returns:
+            Dict with ``order_id``, ``status``, and optional ``already_pending``
+            key when a sell order was already in flight.
+        """
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        logger.info("AlpacaTrader — close_position %s", ticker)
+
+        # Check for existing open orders on this ticker
+        open_orders = self._client.get_orders(
+            GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[ticker])
+        )
+        sell_orders = [o for o in open_orders if o.side.value == "sell"]
+        if sell_orders:
+            o = sell_orders[0]
+            result = {
+                "order_id":       str(o.id),
+                "status":         str(o.status.value),
+                "already_pending": True,
+            }
+            logger.info(
+                "AlpacaTrader — sell already pending for %s: id=%s status=%s",
+                ticker, result["order_id"], result["status"],
+            )
+            return result
+
+        # Cancel any pending buy orders so shares are freed up
+        buy_orders = [o for o in open_orders if o.side.value == "buy"]
+        for o in buy_orders:
+            self._client.cancel_order_by_id(str(o.id))
+            logger.info("AlpacaTrader — cancelled pending buy order %s for %s", o.id, ticker)
+
+        order = self._client.close_position(ticker)
+        result = {"order_id": str(order.id), "status": str(order.status)}
+        logger.info("AlpacaTrader — close_position accepted: id=%s status=%s",
+                    result["order_id"], result["status"])
+        return result
+
     def submit_market_sell(self, ticker: str, qty: int) -> dict:
         """Submit a market sell order for *qty* shares of *ticker*.
 
