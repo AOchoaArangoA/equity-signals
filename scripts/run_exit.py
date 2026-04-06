@@ -163,18 +163,42 @@ def main() -> None:
                 "z_source":       z_source,
                 "exit_reasons":   exit_reasons,
             }
+            reason_str = " · ".join(exit_reasons)
+            z_str_tg   = f"{z:.2f}" if z is not None else "N/A"
+
             if args.dry_run:
                 exit_record["status"] = "dry_run"
+                log.info("DRY RUN — SELL %s qty=%d skipped", ticker, int(qty))
+                _tg_send(
+                    f"<b>🔴 EXIT (DRY RUN) — {ticker}</b>\n"
+                    f"Reason: {reason_str}\n"
+                    f"Z-score: {z_str_tg}\n"
+                    f"Unrealized P&amp;L: {unreal_pct:.1%}\n"
+                    f"Qty: {int(qty)} shares (not submitted)"
+                )
             else:
+                # ── Submit order FIRST, then notify with confirmed order_id ──
                 try:
                     order = trader.submit_market_sell(ticker, int(qty))
                     exit_record.update({"status": "submitted", **order})
                     log.info("SELL submitted: %s", order)
+                    _tg_send(
+                        f"<b>🔴 EXIT EXECUTED — {ticker}</b>\n"
+                        f"Reason: {reason_str}\n"
+                        f"Z-score: {z_str_tg}\n"
+                        f"Unrealized P&amp;L: {unreal_pct:.1%}\n"
+                        f"Qty sold: {int(qty)}\n"
+                        f"Order ID: <code>{order['order_id']}</code>"
+                    )
                 except Exception as exc:
                     log.error("Sell failed for %s: %s", ticker, exc)
                     exit_record["status"] = "error"
                     exit_record["error"]  = str(exc)
                     result["errors"].append({"ticker": ticker, "error": str(exc)})
+                    _tg_send(
+                        f"<b>❌ EXIT FAILED — {ticker}</b>\n"
+                        f"Error: {exc}"
+                    )
 
             result["exits_triggered"].append(exit_record)
         else:
@@ -185,35 +209,26 @@ def main() -> None:
                 "z_score":        round(z, 4) if z is not None else None,
             })
 
-    # ── Telegram notification ─────────────────────────────────────────────────
-    try:
-        from equity_signals.notifications.telegram import TelegramNotifier
-        notifier = TelegramNotifier()
+    # ── "All clear" Telegram — only if no exits were triggered ───────────────
+    if not result["exits_triggered"]:
         run_date_display = result["run_date"].replace("T", " ").replace("Z", " UTC")
-
-        if result["exits_triggered"]:
-            for ex in result["exits_triggered"]:
-                reason_str = " · ".join(ex.get("exit_reasons", []))
-                z_str = f"{ex['z_score']:.2f}" if ex.get("z_score") is not None else "N/A"
-                msg = (
-                    f"<b>🔴 EXIT — {ex['ticker']}</b>\n"
-                    f"Reason: {reason_str}\n"
-                    f"Z-score: {z_str}\n"
-                    f"Unrealized P&amp;L: {ex['unrealized_pct']:.1%}\n"
-                    f"Qty sold: {ex['qty']}"
-                )
-                notifier.send(msg)
-        else:
-            held_tickers = ", ".join(p["ticker"] for p in result["positions_held"])
-            notifier.send(
-                f"<b>✅ Positions OK — {run_date_display}</b>\n"
-                f"{result['positions_checked']} position(s) checked, all within limits\n"
-                f"Tickers: {held_tickers}"
-            )
-    except Exception as exc:
-        log.warning("Telegram notification failed: %s", exc)
+        held_tickers = ", ".join(p["ticker"] for p in result["positions_held"])
+        _tg_send(
+            f"<b>✅ Positions OK — {run_date_display}</b>\n"
+            f"{result['positions_checked']} position(s) checked, all within limits\n"
+            f"Tickers: {held_tickers}"
+        )
 
     _emit(result)
+
+
+def _tg_send(message: str) -> None:
+    """Fire-and-forget Telegram send; logs warning on failure, never raises."""
+    try:
+        from equity_signals.notifications.telegram import TelegramNotifier
+        TelegramNotifier().send(message)
+    except Exception as exc:
+        log.warning("Telegram notification failed: %s", exc)
 
 
 def _emit(result: dict) -> None:
