@@ -112,6 +112,24 @@ def main() -> None:
 
     _emit(result)
 
+    # ── Telegram notification ─────────────────────────────────────────────────
+    try:
+        from equity_signals.notifications.telegram import TelegramNotifier
+        notifier = TelegramNotifier()
+        rows = [
+            {
+                "Ticker":  t,
+                "Close":   f"{v['close']:.2f}",
+                "Z-score": f"{v['z_score']:+.2f}" if v["z_score"] is not None else "N/A",
+                "Signal":  "LONG" if v["signal"] == 1 else "—",
+            }
+            for t, v in result["tickers"].items()
+        ]
+        run_date_display = result["run_date"].replace("T", " ").replace("Z", " UTC")
+        notifier.send_table(f"📊 Signals — {run_date_display}", rows)
+    except Exception as exc:
+        log.warning("Telegram notification failed: %s", exc)
+
 
 def _emit(result: dict) -> None:
     print(json.dumps(result, indent=2))

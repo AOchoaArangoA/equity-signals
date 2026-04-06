@@ -16,9 +16,11 @@ on:
         default: 'signals'
 
 env:
-  ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
-  ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-  ALPACA_BASE_URL:   ${{ secrets.ALPACA_BASE_URL }}
+  ALPACA_API_KEY:       ${{ secrets.ALPACA_API_KEY }}
+  ALPACA_SECRET_KEY:    ${{ secrets.ALPACA_SECRET_KEY }}
+  ALPACA_BASE_URL:      ${{ secrets.ALPACA_BASE_URL }}
+  TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
   PYTHONUNBUFFERED: "1"
 
 jobs:

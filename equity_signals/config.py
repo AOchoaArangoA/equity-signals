@@ -63,6 +63,18 @@ class Settings(BaseSettings):
         description="Max consecutive missing trading days to forward-fill in OHLCV data.",
     )
 
+    # ------------------------------------------------------------------
+    # Telegram notifications (optional)
+    # ------------------------------------------------------------------
+    telegram_bot_token: str | None = Field(
+        default=None,
+        description="Telegram bot token from @BotFather. Required for notifications.",
+    )
+    telegram_chat_id: str | None = Field(
+        default=None,
+        description="Telegram chat or channel ID to send messages to.",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

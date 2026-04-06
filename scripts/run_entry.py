@@ -187,6 +187,32 @@ def main() -> None:
             log.error("Order failed for %s: %s", ticker, exc)
             result["errors"].append({"ticker": ticker, "error": str(exc)})
 
+    # ── Telegram notification ─────────────────────────────────────────────────
+    try:
+        from equity_signals.notifications.telegram import TelegramNotifier
+        notifier = TelegramNotifier()
+        run_date_display = result["run_date"].replace("T", " ").replace("Z", " UTC")
+
+        if result["entries_triggered"]:
+            for entry in result["entries_triggered"]:
+                mode_str = "DRY RUN" if args.dry_run else "EXECUTED"
+                msg = (
+                    f"<b>🟢 ENTRY — {entry['ticker']}</b>\n"
+                    f"Z-score: {sig_map.get(entry['ticker'], {}).get('z_score', 'N/A')}\n"
+                    f"Qty: {entry['qty']} shares @ ~${entry['price']:.2f}\n"
+                    f"Est. value: ${entry['estimated_value']:.0f}\n"
+                    f"Mode: {mode_str}"
+                )
+                notifier.send(msg)
+        else:
+            n = len(tickers)
+            notifier.send(
+                f"<b>⚪ No entries this week</b>\n"
+                f"{run_date_display} — all {n} tickers neutral"
+            )
+    except Exception as exc:
+        log.warning("Telegram notification failed: %s", exc)
+
     _emit(result)
 
 
