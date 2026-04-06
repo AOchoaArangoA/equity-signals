@@ -40,6 +40,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).parent.parent
 _WATCHLIST = _REPO_ROOT / "config" / "watchlist.json"
 _SCRIPT = _REPO_ROOT / "test_mvp_local.py"
+_PYTHON = sys.executable  # works in .venv locally and in CI equally
 
 _VALID_MODES = ("entry", "exit", "signals")
 
@@ -86,7 +87,7 @@ def build_command(mode: str, config: dict) -> str:
 
     if mode == "entry":
         return (
-            f".venv/bin/python {script}"
+            f"{_PYTHON} {script}"
             f" --tickers {tickers_str}"
             f" --window {strategy['window']}"
             f" --z-entry {strategy['z_entry']}"
@@ -98,7 +99,7 @@ def build_command(mode: str, config: dict) -> str:
 
     if mode == "exit":
         return (
-            f".venv/bin/python {script}"
+            f"{_PYTHON} {script}"
             f" --tickers {tickers_str}"
             f" --check-exits"
             f" --z-exit {strategy['z_exit']}"
@@ -107,7 +108,7 @@ def build_command(mode: str, config: dict) -> str:
 
     # mode == "signals"
     return (
-        f".venv/bin/python {script}"
+        f"{_PYTHON} {script}"
         f" --tickers {tickers_str}"
         f" --window {strategy['window']}"
         f" --z-entry {strategy['z_entry']}"
