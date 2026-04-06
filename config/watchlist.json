@@ -1,6 +1,12 @@
 {
   "tickers": ["NU", "ASIX", "AAPL", "MSFT", "JPM", "XOM"],
   "description": "Watchlist base semana 1",
+  "universe": {
+    "pb_percentile": 30,
+    "midcap_min": 300000000,
+    "midcap_max": 2000000000,
+    "sectors": []
+  },
   "strategy": {
     "window": 20,
     "z_entry": 1.5,

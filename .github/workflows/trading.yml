@@ -2,7 +2,7 @@ name: equity-signals watchlist
 
 on:
   schedule:
-    - cron: '0 12 * * 1'       # Monday 8:00 am ET — weekly entry scan
+    - cron: '0 12 * * 1'       # Monday 8:00 am ET — weekly value scan
     - cron: '45 13 * * 1-5'    # 9:45 am ET  — exit check
     - cron: '0 15 * * 1-5'     # 11:00 am ET — exit check
     - cron: '30 16 * * 1-5'    # 12:30 pm ET — exit check
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'entry | exit | signals'
+        description: 'weekly_value | exit | signals | entry'
         required: true
         default: 'signals'
 
@@ -45,13 +45,9 @@ jobs:
           python -c "import equity_signals; print('Package OK')"
           python -c "from equity_signals.execution.alpaca_trader import AlpacaTrader; print('AlpacaTrader OK')"
 
-      - name: Compute signals
+      - name: Weekly value scan
         if: github.event.schedule == '0 12 * * 1'
-        run: python scripts/run_signals.py
-
-      - name: Entry scan
-        if: github.event.schedule == '0 12 * * 1'
-        run: python scripts/run_entry.py
+        run: python scripts/run_weekly_value.py
 
       - name: Exit check
         if: >
@@ -61,6 +57,10 @@ jobs:
           github.event.schedule == '0 18 * * 1-5'  ||
           github.event.schedule == '30 19 * * 1-5'
         run: python scripts/run_exit.py
+
+      - name: Weekly value scan
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'weekly_value'
+        run: python scripts/run_weekly_value.py --dry-run
 
       - name: Compute signals
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'signals'
