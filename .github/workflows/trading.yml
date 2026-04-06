@@ -1,53 +1,54 @@
-name: equity-signals trading
+name: equity-signals watchlist
 
 on:
   schedule:
-    - cron: '0 12 * * 1'       # Monday 8:00 am ET — weekly entry scan
-    - cron: '45 13 * * 1-5'    # 9:45 am ET  — exit check
-    - cron: '0 15 * * 1-5'     # 11:00 am ET — exit check
-    - cron: '30 16 * * 1-5'    # 12:30 pm ET — exit check
-    - cron: '0 18 * * 1-5'     # 2:00 pm ET  — exit check
-    - cron: '30 19 * * 1-5'    # 3:30 pm ET  — exit check pre-close
+    - cron: '0 12 * * 1'
+    - cron: '45 13 * * 1-5'
+    - cron: '0 15 * * 1-5'
+    - cron: '30 16 * * 1-5'
+    - cron: '0 18 * * 1-5'
+    - cron: '30 19 * * 1-5'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode'
+        description: 'entry | exit | signals'
         required: true
         default: 'signals'
-        type: choice
-        options:
-          - entry
-          - exit
-          - signals
+
+env:
+  ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
+  ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+  ALPACA_BASE_URL:   ${{ secrets.ALPACA_BASE_URL }}
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   trade:
     runs-on: ubuntu-latest
-
-    env:
-      ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
-      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-      ALPACA_BASE_URL:   ${{ secrets.ALPACA_BASE_URL }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -e .
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install yfinance alpaca-py python-dotenv pydantic-settings
 
-      - name: Entry scan
+      - name: Verify installation
+        run: |
+          python -c "import equity_signals; print('Package OK')"
+          python -c "from equity_signals.execution.alpaca_trader import AlpacaTrader; print('AlpacaTrader OK')"
+
+      - name: Entry scan (lunes 8am)
         if: github.event.schedule == '0 12 * * 1'
         run: python scripts/run_from_watchlist.py entry
 
       - name: Exit check
-        if: |
+        if: >
           github.event.schedule == '45 13 * * 1-5' ||
           github.event.schedule == '0 15 * * 1-5'  ||
           github.event.schedule == '30 16 * * 1-5' ||
@@ -57,4 +58,4 @@ jobs:
 
       - name: Manual run
         if: github.event_name == 'workflow_dispatch'
-        run: python scripts/run_from_watchlist.py ${{ inputs.mode }}
+        run: python scripts/run_from_watchlist.py ${{ github.event.inputs.mode }}
