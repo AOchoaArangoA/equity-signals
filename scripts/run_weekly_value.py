@@ -75,8 +75,17 @@ def step_russell_universe(
     midcap_min: float,
     midcap_max: float,
     sectors: list[str],
+    sample_n: int = 0,
 ) -> "pd.DataFrame":
-    """Load Russell 2000 and apply value filter. Returns universe_df."""
+    """Load Russell 2000, optionally sample, then apply value filter.
+
+    Args:
+        sample_n: If > 0, draw *sample_n* tickers at random before fetching
+            fundamentals.  Useful during development or when a full universe
+            scan (~36 min) is not needed.  Set to 0 to use all tickers.
+    """
+    import random
+
     import pandas as pd
     from equity_signals.universe.ticker_loader import TickerLoader
     from equity_signals.universe.universe_filter import FilterConfig, UniverseFilter
@@ -85,17 +94,27 @@ def step_russell_universe(
     all_tickers = TickerLoader().get_russell2000()
     log.info("Russell 2000: %d tickers loaded", len(all_tickers))
 
+    if sample_n and sample_n < len(all_tickers):
+        sampled = random.sample(all_tickers, sample_n)
+        log.info(
+            "Random sample: %d/%d tickers selected — %s",
+            sample_n, len(all_tickers), sampled,
+        )
+        pool = sampled
+    else:
+        pool = all_tickers
+
     cfg = FilterConfig(
         midcap_min=midcap_min,
         midcap_max=midcap_max,
         sectors=sectors,
         pb_percentile=pb_percentile,
     )
-    df = UniverseFilter(cfg).run(all_tickers)
+    df = UniverseFilter(cfg).run(pool)
     passing = df[df["value_signal"] == True]
     log.info(
-        "Russell 2000: %d → %d after value filter (pb_percentile=%d)",
-        len(all_tickers), len(passing), pb_percentile,
+        "Universe: %d → %d after value filter (pb_percentile=%d)",
+        len(pool), len(passing), pb_percentile,
     )
     return passing.copy()
 
@@ -312,6 +331,11 @@ def main() -> None:
     parser.add_argument("--z-entry",        type=float, default=1.5,  help="Z-score entry threshold (negative)")
     parser.add_argument("--position-pct",   type=float, default=0.20, help="Fraction of cash per position")
     parser.add_argument("--top-n",          type=int,   default=5,    help="Max number of entries per run")
+    parser.add_argument(
+        "--universe-sample", type=int, default=10, metavar="N",
+        help="Random sample size from Russell 2000 before value filter. "
+             "0 = use all tickers (full scan, ~36 min). Default: 10",
+    )
     args = parser.parse_args()
 
     config   = _load_watchlist()
@@ -331,6 +355,7 @@ def main() -> None:
     result: dict = {
         "run_date":           run_date,
         "dry_run":            args.dry_run,
+        "universe_sample":    args.universe_sample,
         "universe_size":      0,
         "watchlist_added":    [],
         "candidates":         0,
@@ -342,7 +367,10 @@ def main() -> None:
 
     # ── Step 1: Russell 2000 universe ─────────────────────────────────────────
     try:
-        universe_df = step_russell_universe(pb_percentile, midcap_min, midcap_max, sectors)
+        universe_df = step_russell_universe(
+            pb_percentile, midcap_min, midcap_max, sectors,
+            sample_n=args.universe_sample,
+        )
         result["universe_size"] = len(universe_df)
         n_russell = len(universe_df)
     except Exception as exc:
@@ -442,9 +470,11 @@ def _send_telegram(
         no_signal_str += f" (+{len(no_signal) - 10} more)"
 
     entries_block = "\n".join(entry_lines) if entry_lines else "  (none)"
+    sample_n = result.get("universe_sample", 0)
+    sample_tag = f" (sample={sample_n})" if sample_n else ""
     msg = (
         f"<b>📈 Weekly Value Scan{mode_tag} — {run_date_display}</b>\n\n"
-        f"<b>Universe:</b> {n_russell} Russell 2000 + {n_watchlist} watchlist\n"
+        f"<b>Universe:</b> {n_russell} Russell 2000{sample_tag} + {n_watchlist} watchlist\n"
         f"<b>Value candidates:</b> {result['universe_size'] + n_watchlist}\n"
         f"<b>Confluence signals:</b> {result['confluence_signals']}\n\n"
         f"<b>Entries:</b>\n<pre>{entries_block}</pre>\n\n"
