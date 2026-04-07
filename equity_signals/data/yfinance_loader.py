@@ -177,12 +177,34 @@ class YFinanceLoader:
         # ---- cache check -----------------------------------------------
         cached = self._load_cache()
         if cached is not None:
-            logger.info(
-                "Cache hit — skipping %d API calls (cache age < %d days)",
-                len(tickers),
-                self._cache_ttl_days,
-            )
-            return cached
+            cached_set = set(cached["ticker"].tolist())
+            requested_set = set(tickers)
+            # Accept the cache only when it covers ≥ 80 % of requested tickers.
+            # This prevents a small per-watchlist cache (e.g. 2 rows) from
+            # being returned for a large universe request (e.g. 1 900 tickers).
+            coverage = len(requested_set & cached_set) / max(len(requested_set), 1)
+            if coverage >= 0.80:
+                logger.info(
+                    "Cache hit — %d/%d requested tickers covered (%.0f%%); "
+                    "skipping API calls (cache age < %d days)",
+                    len(requested_set & cached_set),
+                    len(requested_set),
+                    coverage * 100,
+                    self._cache_ttl_days,
+                )
+                # Return only the rows the caller asked for.
+                return (
+                    cached[cached["ticker"].isin(requested_set)]
+                    .reset_index(drop=True)
+                )
+            else:
+                logger.info(
+                    "Cache miss — cached %d rows cover only %.0f%% of %d requested "
+                    "tickers; fetching fresh data",
+                    len(cached),
+                    coverage * 100,
+                    len(requested_set),
+                )
 
         if not tickers:
             return pd.DataFrame(columns=_FUNDAMENTALS_COLS)
@@ -322,12 +344,19 @@ class YFinanceLoader:
         return self._cache_dir / f"{_CACHE_PREFIX}{for_date.strftime('%Y%m%d')}.parquet"
 
     def _load_cache(self) -> pd.DataFrame | None:
-        """Return a cached DataFrame if a fresh file exists, else ``None``."""
+        """Return the most complete fresh cached DataFrame, else ``None``.
+
+        When multiple parquet files exist within the TTL window, the one with
+        the most rows is returned — not necessarily the most recent.  This
+        prevents a small per-watchlist fetch (e.g. 2 tickers) from shadowing a
+        large full-universe cache (e.g. 1 900 tickers) just because it was
+        written later.
+        """
         if not self._cache_dir.exists():
             return None
 
         today = date.today()
-        candidates: list[tuple[date, Path]] = []
+        fresh: list[Path] = []
 
         for path in self._cache_dir.glob(_CACHE_GLOB):
             date_str = path.stem[len(_CACHE_PREFIX):]
@@ -336,34 +365,67 @@ class YFinanceLoader:
             except ValueError:
                 logger.debug("Ignoring unrecognised cache file: %s", path)
                 continue
-            candidates.append((file_date, path))
+            age_days = (today - file_date).days
+            if age_days < self._cache_ttl_days:
+                fresh.append(path)
 
-        if not candidates:
+        if not fresh:
             return None
 
-        newest_date, newest_path = max(candidates, key=lambda t: t[0])
-        age_days = (today - newest_date).days
+        # Pick the file with the most rows among all fresh candidates.
+        best_path: Path | None = None
+        best_rows: int = -1
+        for path in fresh:
+            try:
+                import pyarrow.parquet as pq  # lazy import — pyarrow ships with pandas
+                n_rows = pq.read_metadata(path).num_rows
+            except Exception:
+                n_rows = path.stat().st_size  # fall back to file size as a proxy
+            if n_rows > best_rows:
+                best_rows = n_rows
+                best_path = path
 
-        if age_days >= self._cache_ttl_days:
-            logger.debug(
-                "YFinance cache %s is %d day(s) old (TTL=%d) — ignoring",
-                newest_path.name,
-                age_days,
-                self._cache_ttl_days,
-            )
+        if best_path is None:
             return None
 
-        logger.debug(
-            "Loading YFinance cache from %s (age=%d days)", newest_path.name, age_days
-        )
-        return pd.read_parquet(newest_path)
+        logger.debug("Loading YFinance cache from %s (%d rows)", best_path.name, best_rows)
+        return pd.read_parquet(best_path)
 
     def _save_cache(self, df: pd.DataFrame) -> None:
-        """Write *df* to a dated parquet file under :attr:`_cache_dir`."""
+        """Write *df* to a dated parquet file, skipping if a larger fresh cache exists.
+
+        A small per-watchlist fetch should not overwrite (or shadow) a large
+        full-universe cache that is still within the TTL window.
+        """
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        path = self._cache_path(date.today())
+
+        # Check whether any fresh file already has more rows than the new df.
+        today = date.today()
+        for path in self._cache_dir.glob(_CACHE_GLOB):
+            date_str = path.stem[len(_CACHE_PREFIX):]
+            try:
+                file_date = datetime.strptime(date_str, "%Y%m%d").date()
+            except ValueError:
+                continue
+            if (today - file_date).days >= self._cache_ttl_days:
+                continue
+            try:
+                import pyarrow.parquet as pq
+                existing_rows = pq.read_metadata(path).num_rows
+            except Exception:
+                existing_rows = 0
+            if existing_rows > len(df):
+                logger.debug(
+                    "Skipping cache write — existing %s has %d rows vs %d new rows",
+                    path.name,
+                    existing_rows,
+                    len(df),
+                )
+                return
+
+        path = self._cache_path(today)
         df.to_parquet(path, index=False)
-        logger.debug("YFinance cache written to %s", path)
+        logger.debug("YFinance cache written to %s (%d rows)", path, len(df))
 
 
 # ---------------------------------------------------------------------------
