@@ -16,10 +16,9 @@ Design
 * **Retry with exponential back-off** — up to :data:`_MAX_RETRIES` attempts
   per ticker (2 s → 4 s → 8 s).  Auth-related failures (HTTP 401 / invalid
   crumb) additionally trigger a session refresh before the next attempt.
-* **Shared session** — a single :class:`requests.Session` is created in
-  ``__init__`` and passed to every ``yf.Ticker`` call.  On auth failure the
-  session is replaced (under a :class:`~threading.Lock`) so all subsequent
-  requests re-negotiate cookies/crumb.
+* **No custom session** — yfinance 1.2+ manages its own ``curl_cffi``
+  session internally.  Passing a ``requests.Session`` raises
+  ``YFDataException`` in modern versions, so sessions are no longer injected.
 * **Disk cache** — results are written to
   ``.cache/yf_fundamentals_YYYYMMDD.parquet``.  On subsequent calls within
   ``cache_ttl_days`` the cache is returned immediately, skipping all API
@@ -54,7 +53,6 @@ from __future__ import annotations
 
 import logging
 import random
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
@@ -62,7 +60,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import requests
 import yfinance as yf
 
 from equity_signals.config import settings
@@ -138,8 +135,6 @@ class YFinanceLoader:
             else settings.yfinance_cache_ttl_days
         )
         self._cache_dir: Path = cache_dir
-        self._session: requests.Session = self._new_session()
-        self._session_lock: threading.Lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -245,28 +240,6 @@ class YFinanceLoader:
         return df
 
     # ------------------------------------------------------------------
-    # Private — session management
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _new_session() -> requests.Session:
-        """Create a fresh requests.Session with a browser-like User-Agent."""
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-        })
-        return session
-
-    def _refresh_session(self) -> None:
-        """Replace the shared session (thread-safe).  Call on 401 / crumb error."""
-        with self._session_lock:
-            self._session = self._new_session()
-        logger.info("YFinanceLoader — session refreshed (crumb/auth error)")
-
-    # ------------------------------------------------------------------
     # Private — single-ticker fetch with retry
     # ------------------------------------------------------------------
 
@@ -297,10 +270,7 @@ class YFinanceLoader:
             time.sleep(random.uniform(0.5, 1.5))
 
             try:
-                with self._session_lock:
-                    session = self._session
-
-                info: dict[str, Any] = yf.Ticker(ticker, session=session).info
+                info: dict[str, Any] = yf.Ticker(ticker).info
 
                 for info_key, col in _INFO_FIELD_MAP.items():
                     value = info.get(info_key)
@@ -318,12 +288,6 @@ class YFinanceLoader:
                 return row  # success — exit retry loop
 
             except Exception as exc:  # noqa: BLE001
-                exc_str = str(exc).lower()
-                is_auth = any(sig in exc_str for sig in _AUTH_ERROR_SIGNALS)
-
-                if is_auth:
-                    self._refresh_session()
-
                 if attempt < _MAX_RETRIES - 1:
                     backoff = _RETRY_BACKOFF[attempt]
                     logger.warning(
